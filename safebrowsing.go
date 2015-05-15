@@ -70,8 +70,9 @@ var Client string = "api"
 var AppVersion string = "1.5.2"
 var ProtocolVersion string = "3.0"
 var OfflineMode bool = false
+var IntialUpdatePeriod = 300
 
-func NewSafeBrowsing(apiKey string, dataDirectory string) (sb *SafeBrowsing, err error) {
+func NewSafeBrowsing(apiKey string, dataDirectory string) (sb *SafeBrowsing) {
 	sb = &SafeBrowsing{
 		Key:             apiKey,
 		Client:          Client,
@@ -85,7 +86,7 @@ func NewSafeBrowsing(apiKey string, dataDirectory string) (sb *SafeBrowsing, err
 	}
 
 	// if the dataDirectory does not currently exist, have a go at creating it:
-	err = os.MkdirAll(dataDirectory, os.ModeDir|0700)
+	err := os.MkdirAll(dataDirectory, os.ModeDir|0700)
 	if err != nil {
 		sb.Logger.Error(
 			"Directory \"%s\" does not exist, and I was unable to create it!",
@@ -107,13 +108,44 @@ func NewSafeBrowsing(apiKey string, dataDirectory string) (sb *SafeBrowsing, err
 			sb.Lists[listName] = tmpList
 		}
 		//		debug.FreeOSMemory()
-		return sb, nil
+		return sb
 	}
 
-	// normal mode, contact the server for updates, etc.
-	err = sb.updateProcess()
+	// normal mode
+	// Try to run updates in the background
+	go sb.tryUpdate()
 
-	return sb, err
+	return sb
+}
+
+// Keeps calling sb.updateProcess() every IntialUpdatePeriod seconds until
+// it is successful.
+func (sb *SafeBrowsing) tryUpdate() {
+
+	// Try the initial update right away and return if all is OK.
+	err := sb.updateProcess()
+	if err == nil {
+		sb.Logger.Error("Initial update OK")
+		return
+	}
+
+	sb.Logger.Error("Initial update failed, rescheduling")
+	for {
+		select {
+		case <-time.After(time.Duration(IntialUpdatePeriod) * time.Second):
+			err := sb.updateProcess()
+
+			// An error happened, just log and continue:
+			if err != nil {
+				sb.Logger.Error("Initial update failed, rescheduling")
+
+				// No error happened, done:
+			} else {
+				sb.Logger.Error("Initial update OK after retry")
+				return
+			}
+		}
+	}
 }
 
 func (sb *SafeBrowsing) updateProcess() (err error) {
